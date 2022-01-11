@@ -290,7 +290,7 @@ namespace Armor
         }
     }
 
-    public struct AttachmentProperties
+    public class AttachmentProperties
     {
         public AttachmentProperties(string armorPiece, Sprite sprite, Vector2 attachmentPoint, Vector3 scaleOffset, float initialPoints, PhysicalProperties physicalProperties)
         {
