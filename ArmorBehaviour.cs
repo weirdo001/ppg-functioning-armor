@@ -418,7 +418,7 @@ namespace Armor
     }
     // has the properties of armor like its health and sprite
     // used when creating armor
-    public struct ArmorProperties
+    public class ArmorProperties
     {
         public ArmorProperties(string armorPiece, Sprite sprite, float armorPoints, PhysicalProperties physicalProperties)
         {
