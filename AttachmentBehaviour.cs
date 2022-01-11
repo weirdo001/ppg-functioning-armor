@@ -1,7 +1,6 @@
 using UnityEngine;
 using UnityEngine.Events;
 using System.Collections;
-using System.Collections.Generic;
 
 namespace Armor
 {
@@ -10,19 +9,21 @@ namespace Armor
         bool attached;
         [SerializeField]
         public ArmorBehaviour attachedArmor;
-        public GameObject sprite;
-        public GameObject pivot;
 
-        Collider2D[] results = new Collider2D[4];
+        GameObject sprite; // sprite object, only for animation so the actual attachment doesn't have to be rotated around
+        GameObject pivot; // pivot for the sprite object
 
-        bool active = true;
+        Collider2D[] results = new Collider2D[4]; // collider check when activated. isn't resized
+
+        bool active = true; // attachments spawn activated
 
         AttachmentProperties prop;
-        Coroutine anim;
-        FixedJoint2D connection;
+        Coroutine anim; // for stopping animation coroutines early
+        FixedJoint2D connection; // connection to attached armor piece, destroyed when snapping or detaching
+        // unsure if this can cause issues with detaching or snapping after saving
 
         [SerializeField]
-        public int spriteIndex = -1;
+        public int spriteIndex = -1; // for multiple sprites
 
         void Start()
         {
@@ -60,7 +61,7 @@ namespace Armor
             }
 
             if (attachedArmor)
-                Attach(attachedArmor);
+                Attach(attachedArmor); // must be after creating sprite and pivot objects
 
             UpdateDamage();
         }
@@ -72,6 +73,7 @@ namespace Armor
         void SetProperties()
         { 
             SpriteRenderer sr = GetComponent<SpriteRenderer>();
+
             if (prop.sprites == null)
                 sr.sprite = prop.sprite;
             else if (spriteIndex == -1)
@@ -120,7 +122,7 @@ namespace Armor
             {
                 ContactFilter2D filter = new ContactFilter2D();
                 filter.NoFilter();
-                Physics2D.OverlapBox(transform.position, transform.localScale, transform.rotation.z, filter, results);
+                Physics2D.OverlapBox(transform.position, transform.localScale, transform.rotation.z, filter, results); // checks for overlapping colliders
                 if (results != null)
                 {
                     foreach (Collider2D col in results)
@@ -144,9 +146,9 @@ namespace Armor
             {
                 active = false;
                 if (anim != null)
-                    StopCoroutine(anim);
+                    StopCoroutine(anim); // stops previous animation just in case it is still going
                 anim = StartCoroutine(animateRotation(prop.activatedAngle, prop.deactivatedAngle, true));
-                gameObject.layer = 10;
+                gameObject.layer = 10; // disables collision
             }
             else
             {
@@ -170,12 +172,12 @@ namespace Armor
                 GetComponent<SpriteRenderer>().enabled = false;
             pivot.transform.localRotation = Quaternion.Euler(0, 0, start);
             sprite.GetComponent<SpriteRenderer>().enabled = true;
-            for (float i = 0; i < 1; i += Time.fixedDeltaTime / 1.5f)
+            for (float i = 0; i < 1; i += Time.fixedDeltaTime / 1.5f) // animation takes 1.5 seconds
             {
                 pivot.transform.localRotation = Quaternion.Slerp(pivot.transform.localRotation, Quaternion.Euler(0, 0, angle), i);
                 yield return new WaitForFixedUpdate();
             }
-            pivot.transform.localRotation = Quaternion.Euler(0, 0, angle);
+            pivot.transform.localRotation = Quaternion.Euler(0, 0, angle); // changes rotation just in case
             sprite.GetComponent<SpriteRenderer>().enabled = visible;
             if (active)
                 GetComponent<SpriteRenderer>().enabled = true;
@@ -191,15 +193,17 @@ namespace Armor
         {
             Rigidbody2D rb = GetComponent<Rigidbody2D>();
             rb.angularVelocity = 0;
+
             SpriteRenderer sr = GetComponent<SpriteRenderer>();
             sr.sortingOrder = target.GetComponent<SpriteRenderer>().sortingOrder + 2;
-            sr.sortingLayerName = target.GetComponent<SpriteRenderer>().sortingLayerName;
+            sr.sortingLayerName = target.GetComponent<SpriteRenderer>().sortingLayerName; // keeps the attachment on top of the armor
             if (sprite)
             {
                 SpriteRenderer sr2 = sprite.GetComponent<SpriteRenderer>();
                 sr2.sortingOrder = sr.sortingOrder + 1;
                 sr2.sortingLayerName = sr.sortingLayerName;
             }
+
             attached = true;
             rb.isKinematic = true;
             transform.parent = target.transform;
@@ -209,7 +213,7 @@ namespace Armor
             transform.parent = null;
 
             if (connection)
-                Destroy(connection); // !!!!!note this is stupid please test this
+                Destroy(connection); // destroys the previous connection, so that there is only ever one
             connection = gameObject.AddComponent<FixedJoint2D>();
             connection.dampingRatio = 1;
             connection.frequency = 0;
@@ -228,7 +232,7 @@ namespace Armor
                     return;
                 }
                 attachedArmor.attachments.Remove(this);
-                attachedArmor.attachments.Capacity -= 1;
+                attachedArmor.attachments.Capacity -= 1; // resizing because remove doesnt do that apparently
                 Destroy(connection);
                 attached = false;
                 attachedArmor = null;
