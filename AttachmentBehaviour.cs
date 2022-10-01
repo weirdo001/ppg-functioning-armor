@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.Events;
 using System.Collections;
+using System;
 
 namespace Armor
 {
@@ -16,8 +17,11 @@ namespace Armor
         Collider2D[] results = new Collider2D[4]; // collider check when activated. isn't resized
 
         bool active = true; // attachments spawn activated
+        bool alwaysFakeSprite = false; // should the animation sprite always be active?
 
         AttachmentProperties prop;
+
+        SpriteRenderer spriteRenderer;
         Coroutine anim; // for stopping animation coroutines early
         FixedJoint2D connection; // connection to attached armor piece, destroyed when snapping or detaching
         // unsure if this can cause issues with detaching or snapping after saving
@@ -36,7 +40,7 @@ namespace Armor
 
             phys.HoldingPositions = new Vector3[0];
 
-            if (prop.type != AttachmentProperties.ActivationType.None)
+            if (prop.animationOnUse)
             {
                 // creates a sprite for animation and a pivot for that sprite
                 pivot = new GameObject();
@@ -45,6 +49,7 @@ namespace Armor
                 pivot.transform.localScale = Vector3.one;
                 pivot.transform.localRotation = Quaternion.Euler(0, 0, prop.activatedAngle);
                 pivot.AddComponent<Optout>();
+
                 sprite = new GameObject("sprite");
                 sprite.transform.parent = transform;
                 sprite.transform.localPosition = Vector3.zero;
@@ -52,12 +57,16 @@ namespace Armor
                 sprite.transform.localRotation = Quaternion.Euler(0, 0, prop.activatedAngle);
                 sprite.transform.parent = pivot.transform;
                 SpriteRenderer sr = sprite.AddComponent<SpriteRenderer>();
+
                 sprite.AddComponent<Optout>();
                 if (prop.sprites == null)
                     sr.sprite = prop.sprite;
                 else
                     sr.sprite = prop.sprites[spriteIndex];
-                sr.enabled = false;
+                if (alwaysFakeSprite)
+                    spriteRenderer.enabled = false;
+                else
+                    sr.enabled = false;
             }
 
             if (attachedArmor)
@@ -69,16 +78,21 @@ namespace Armor
         {
             if (attached && !attachedArmor)
                 Destroy(gameObject);
+            if (attached && prop.activationCriteria != null && prop.activationCriteria(this))
+            {
+                Activate();
+            }
         }
         void SetProperties()
         { 
             SpriteRenderer sr = GetComponent<SpriteRenderer>();
+            spriteRenderer = sr; // im just too fukin lazy to change all the sr's here
 
             if (prop.sprites == null)
                 sr.sprite = prop.sprite;
             else if (spriteIndex == -1)
             {
-                int random = Random.Range(0, prop.sprites.Length);
+                int random = UnityEngine.Random.Range(0, prop.sprites.Length);
                 sr.sprite = prop.sprites[random];
                 spriteIndex = random;
             }
@@ -91,6 +105,7 @@ namespace Armor
                 initialPoints = customInitialPoints;
 
             physicalProperties = Instantiate(prop.physicalProperties);
+            alwaysFakeSprite = prop.alwaysFakeSprite;
 
             if (modified)
                 initialAbsorb = modifiedAbsorption;
@@ -115,6 +130,7 @@ namespace Armor
                 PolygonCollider2D poly = gameObject.AddComponent<PolygonCollider2D>();
                 poly.points = prop.colliderPoints;
             }
+            disableCollisionOnDestroyed = prop.disableCollisionWhenDestroyed;
         }
         public void Use(ActivationPropagation activation)
         {
@@ -127,7 +143,7 @@ namespace Armor
                 {
                     foreach (Collider2D col in results)
                     {
-                        if (col && col.TryGetComponent(out ArmorBehaviour armor) && armor.propName == prop.armorPiece)
+                        if (col && col.TryGetComponent(out ArmorBehaviour armor) && (armor.propName == prop.armorPiece || prop.armorPiece == ""))
                         {
                             Attach(armor);
                             break;
@@ -140,23 +156,30 @@ namespace Armor
         }
         public void Activate()
         {
-            if (!attached || prop.type != AttachmentProperties.ActivationType.Use)
+            if (!attached)
                 return;
-            if (active)
+            if (prop.animationOnUse)
             {
-                active = false;
-                if (anim != null)
-                    StopCoroutine(anim); // stops previous animation just in case it is still going
-                anim = StartCoroutine(animateRotation(prop.activatedAngle, prop.deactivatedAngle, true));
-                gameObject.layer = 10; // disables collision
+                if (active)
+                {
+                    active = false;
+                    if (anim != null)
+                        StopCoroutine(anim); // stops previous animation just in case it is still going
+                    anim = StartCoroutine(animateRotation(prop.activatedAngle, prop.deactivatedAngle, true));
+                    gameObject.layer = 10; // disables collision
+                }
+                else
+                {
+                    active = true;
+                    if (anim != null)
+                        StopCoroutine(anim);
+                    anim = StartCoroutine(animateRotation(prop.deactivatedAngle, prop.activatedAngle, false));
+                    gameObject.layer = 9;
+                }
             }
-            else
+            else if (prop.activateOnUse)
             {
-                active = true;
-                if (anim != null)
-                    StopCoroutine(anim);
-                anim = StartCoroutine(animateRotation(prop.deactivatedAngle, prop.activatedAngle, false));
-                gameObject.layer = 9;
+                prop.activationAction?.Invoke(this); // i guess, checks if it exists, then invokes it if it does
             }
         }
         void OnCollisionEnter2D(Collision2D col)
@@ -168,19 +191,21 @@ namespace Armor
         }
         public IEnumerator animateRotation(float start, float angle, bool visible)
         {
-            if (!active)
-                GetComponent<SpriteRenderer>().enabled = false;
+            if (!active && !alwaysFakeSprite)
+                spriteRenderer.enabled = false;
             pivot.transform.localRotation = Quaternion.Euler(0, 0, start);
-            sprite.GetComponent<SpriteRenderer>().enabled = true;
+            if (!alwaysFakeSprite)
+                sprite.GetComponent<SpriteRenderer>().enabled = true;
             for (float i = 0; i < 1; i += Time.fixedDeltaTime / 1.5f) // animation takes 1.5 seconds
             {
                 pivot.transform.localRotation = Quaternion.Slerp(pivot.transform.localRotation, Quaternion.Euler(0, 0, angle), i);
                 yield return new WaitForFixedUpdate();
             }
             pivot.transform.localRotation = Quaternion.Euler(0, 0, angle); // changes rotation just in case
-            sprite.GetComponent<SpriteRenderer>().enabled = visible;
-            if (active)
-                GetComponent<SpriteRenderer>().enabled = true;
+            if (!alwaysFakeSprite)
+                sprite.GetComponent<SpriteRenderer>().enabled = visible;
+            if (active && !alwaysFakeSprite)
+                spriteRenderer.enabled = true;
         }
         void Attach(ArmorBehaviour armor)
         {
@@ -221,6 +246,7 @@ namespace Armor
 
             rb.isKinematic = false;
             active = true;
+            target.gameObject.SendMessage("CopyPosition", gameObject, SendMessageOptions.DontRequireReceiver);
         }
         public void Detach()
         {
@@ -236,6 +262,16 @@ namespace Armor
                 Destroy(connection);
                 attached = false;
                 attachedArmor = null;
+                //sprite.GetComponent<SpriteRenderer>().enabled = false;
+                //spriteRenderer.enabled = true;
+            }
+        }
+        void OnDestroy()
+        {
+            if (attached)
+            {
+                attachedArmor.attachments.Remove(this);
+                attachedArmor.attachments.Capacity -= 1;
             }
         }
         public override void ContextMenu()
@@ -305,7 +341,6 @@ namespace Armor
             this.initialPoints = initialPoints;
             this.physicalProperties = physicalProperties;
             this.scaleOffset = scaleOffset;
-            type = ActivationType.None;
         }
         public AttachmentProperties(string armorPiece, Sprite sprite, Vector2 attachmentPoint, Vector3 scaleOffset, Vector2[] colliderPoints, float initialPoints, PhysicalProperties physicalProperties)
         {
@@ -320,9 +355,8 @@ namespace Armor
             this.initialPoints = initialPoints;
             this.physicalProperties = physicalProperties;
             this.scaleOffset = scaleOffset;
-            type = ActivationType.None;
         }
-        public AttachmentProperties(string armorPiece, Sprite sprite, ActivationType type, float activatedAngle, float deactivatedAngle, Vector2 pivot, Vector2 attachmentPoint, Vector3 scaleOffset, Vector2[] colliderPoints, float initialPoints, PhysicalProperties physicalProperties)
+        public AttachmentProperties(string armorPiece, Sprite sprite, float activatedAngle, float deactivatedAngle, Vector2 pivot, Vector2 attachmentPoint, Vector3 scaleOffset, Vector2[] colliderPoints, float initialPoints, PhysicalProperties physicalProperties)
         {
             this.armorPiece = armorPiece;
             this.sprite = sprite;
@@ -335,7 +369,6 @@ namespace Armor
             this.initialPoints = initialPoints;
             this.physicalProperties = physicalProperties;
             this.scaleOffset = scaleOffset;
-            this.type = type;
         }
         public AttachmentProperties(string armorPiece, Sprite[] sprites, Vector2 attachmentPoint, Vector3 scaleOffset, float initialPoints, PhysicalProperties physicalProperties)
         {
@@ -350,7 +383,6 @@ namespace Armor
             this.initialPoints = initialPoints;
             this.physicalProperties = physicalProperties;
             this.scaleOffset = scaleOffset;
-            type = ActivationType.None;
         }
         public AttachmentProperties(string armorPiece, Sprite[] sprites, Vector2 attachmentPoint, Vector3 scaleOffset, Vector2[] colliderPoints, float initialPoints, PhysicalProperties physicalProperties)
         {
@@ -365,9 +397,8 @@ namespace Armor
             this.initialPoints = initialPoints;
             this.physicalProperties = physicalProperties;
             this.scaleOffset = scaleOffset;
-            type = ActivationType.None;
         }
-        public AttachmentProperties(string armorPiece, Sprite[] sprites, ActivationType type, float activatedAngle, float deactivatedAngle, Vector2 pivot, Vector2 attachmentPoint, Vector3 scaleOffset, Vector2[] colliderPoints, float initialPoints, PhysicalProperties physicalProperties)
+        public AttachmentProperties(string armorPiece, Sprite[] sprites, float activatedAngle, float deactivatedAngle, Vector2 pivot, Vector2 attachmentPoint, Vector3 scaleOffset, Vector2[] colliderPoints, float initialPoints, PhysicalProperties physicalProperties)
         {
             this.armorPiece = armorPiece;
             sprite = null;
@@ -380,11 +411,7 @@ namespace Armor
             this.initialPoints = initialPoints;
             this.physicalProperties = physicalProperties;
             this.scaleOffset = scaleOffset;
-            this.type = type;
         }
-
-        [SkipSerialisation]
-        public ActivationType type;
         [SkipSerialisation]
         public float activatedAngle;
         [SkipSerialisation]
@@ -392,7 +419,7 @@ namespace Armor
 
         public Vector2 pivot;
         [SkipSerialisation]
-        public string armorPiece; // dictionary name of the armor it attaches to
+        public string armorPiece; // dictionary name of the armor it attaches to, leave blank to attach to everything
         [SkipSerialisation]
         public Vector2 attachmentPoint;
         [SkipSerialisation]
@@ -408,7 +435,13 @@ namespace Armor
         [SkipSerialisation]
         public PhysicalProperties physicalProperties;
 
+        public bool disableCollisionWhenDestroyed = true;
 
-        public enum ActivationType { None, Use }
+
+        public bool animationOnUse = false;
+        public bool activateOnUse = false;
+        public bool alwaysFakeSprite = false;
+        public Func<AttachmentBehaviour, bool> activationCriteria;
+        public Action<AttachmentBehaviour> activationAction;
     }
 }
