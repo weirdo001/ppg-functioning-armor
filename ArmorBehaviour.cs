@@ -1,6 +1,6 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Events;
-using System.Collections.Generic;
 
 namespace Armor
 {
@@ -23,7 +23,7 @@ namespace Armor
                     else
                         sprite = armor.sprites[0];
 
-                    GameObject obj = ModAPI.CreatePhysicalObject(set[i], sprite);
+                    GameObject obj = ModAPI.CreatePhysicalObject("Armor", sprite);
                     obj.AddComponent<SerialiseInstructions>().OriginalSpawnableAsset = ModAPI.FindSpawnable("Stick");
                     Destroy(obj.GetComponent<Optout>()); // this is so it can be saved
 
@@ -55,7 +55,7 @@ namespace Armor
                     else
                         sprite = attach.sprites[0];
 
-                    GameObject obj = ModAPI.CreatePhysicalObject(aset[i], sprite);
+                    GameObject obj = ModAPI.CreatePhysicalObject("Armor", sprite);
                     obj.AddComponent<SerialiseInstructions>().OriginalSpawnableAsset = ModAPI.FindSpawnable("Stick");
                     Destroy(obj.GetComponent<Optout>());
 
@@ -106,6 +106,8 @@ namespace Armor
         [SerializeField]
         public float modifiedAbsorption;
 
+        public bool disableCollisionOnDestroyed = true; // this is here cause im tired
+
         public virtual void OnFragmentHit(float force)
         {
             if (durabilityDisabled)
@@ -118,25 +120,29 @@ namespace Armor
             armorPoints = Mathf.Max(armorPoints, 0);
             if (armorPoints == 0)
             {
-                gameObject.layer = 10; // disabled collision layer
+                if (disableCollisionOnDestroyed)
+                    gameObject.layer = 10; // disabled collision layer
                 destroyed = true;
             }
             else
             {
-                gameObject.layer = 9;
+                if (disableCollisionOnDestroyed)
+                    gameObject.layer = 9;
                 destroyed = false;
             }
-            if (!destroyed)
-            {
-                physicalProperties.BulletSpeedAbsorptionPower = initialAbsorb * (armorPoints / initialPoints);
-                physicalProperties.Brittleness = Mathf.Min(initialBrittle + (1 - (armorPoints / initialPoints)), 1);
-            }
+            float percent = armorPoints / initialPoints;
+            physicalProperties.BulletSpeedAbsorptionPower = Mathf.SmoothStep(0, initialAbsorb, percent);
+            physicalProperties.Brittleness = Mathf.SmoothStep(1, initialBrittle, percent);
         }
         void Shot(Shot shot)
         {
             if (durabilityDisabled)
                 return;
-            armorPoints -= shot.damage / 10;
+            // damage - 8 small, 15 medium, 25 high, 50 very high, 100 massive
+            // speed - 6 low, 10 medium, 15 high, 25 very high, 35 massive
+            // result - 4.8 low, 15 medium, 37.5 high, 62.5 very high (minigun), 350 massive
+            float damage = Mathf.Min(shot.damage, shot.cartridge.Damage) * shot.cartridge.StartSpeed; // magnifying the difference between low caliber and high caliber weapons
+            armorPoints -= damage / 10;
             UpdateDamage();
         }
         public void Nocollide(GameObject col)
@@ -147,18 +153,25 @@ namespace Armor
         }
         public virtual void ContextMenu()
         {
-
-            GetComponent<PhysicalBehaviour>().ContextMenuOptions.Buttons.Add(new ContextMenuButton("chekbut", "Check armor quality", "Check how damaged the armor is.", new UnityAction[1]
+            List<ContextMenuButton> buttons = phys.ContextMenuOptions.Buttons;
+            ContextMenuButton[] contextMenuButtonArray = new ContextMenuButton[4];
+            ContextMenuButton contextMenuButton = new ContextMenuButton("checkQualityFA", "Check armor quality", "Check how effective the armor is.", new UnityAction[1]
             {
-                () =>
+                () => 
                 {
                     if (armorPoints != 0)
-                        ModAPI.Notify("Armor points " + Mathf.Round(armorPoints * 10) / 10 + " / " + initialPoints);
+                    {
+                        int effectiveness = (int)((Mathf.SmoothStep(0, 1, armorPoints / initialPoints) * 100) + 0.5f);
+                        ModAPI.Notify("Armor points " + Mathf.Round(armorPoints * 10) / 10 + " / " + initialPoints + " -- " + effectiveness + "% effectiveness");
+                    }
                     else
-                        ModAPI.Notify("<color=red>Armor points 0 / " + initialPoints + "</color>");
+                        ModAPI.Notify("<color=red>Armor points 0 / " + initialPoints + " -- 0% effectiveness</color>");
                 }
-            }));
-            GetComponent<PhysicalBehaviour>().ContextMenuOptions.Buttons.Add(new ContextMenuButton("repbut", "Repair armor", "Repair the armor.", new UnityAction[1]
+            });
+            contextMenuButton.LabelWhenMultipleAreSelected = "Check armor quality";
+            contextMenuButtonArray[0] = contextMenuButton;
+
+            contextMenuButton = new ContextMenuButton("repairArmorFA", "Repair armor", "Repairs the armor.", new UnityAction[1]
             {
                 () =>
                 {
@@ -166,8 +179,11 @@ namespace Armor
                     UpdateDamage();
                     ModAPI.Notify("Armor repaired!");
                 }
-            }));
-            GetComponent<PhysicalBehaviour>().ContextMenuOptions.Buttons.Add(new ContextMenuButton("durbut", "Modify durability", "Modify the max durability of the armor, or disable durability.", new UnityAction[1]
+            });
+            contextMenuButton.LabelWhenMultipleAreSelected = "Repair armor";
+            contextMenuButtonArray[1] = contextMenuButton;
+
+            contextMenuButton = new ContextMenuButton("modifyDurabilityFA", "Modify durability", "Modify or disable the durability of the armor.", new UnityAction[1]
             {
                 () =>
                 {
@@ -208,13 +224,16 @@ namespace Armor
                         () => dialog.Close()
                     }));
                 }
-            }));
-            GetComponent<PhysicalBehaviour>().ContextMenuOptions.Buttons.Add(new ContextMenuButton("absorbut", "Modify hardness", "Modify how well the armor stops bullets.", new UnityAction[1]
+            });
+            contextMenuButton.LabelWhenMultipleAreSelected = "Modify durability";
+            contextMenuButtonArray[2] = contextMenuButton;
+
+            contextMenuButton = new ContextMenuButton("modifyHardnessFA", "Modify hardness", "Modify how well the armor can stop bullets.", new UnityAction[1]
             {
                 () =>
                 {
                     DialogBox dialog = null;
-                    dialog = DialogBoxManager.TextEntry("Input a value for absorption. Higher absorption values increase the amount of force from shots, so be careful. Current absorption is " + (modified ? modifiedAbsorption : physicalProperties.BulletSpeedAbsorptionPower) + ".", "", new DialogButton("Apply", true, new UnityAction[1]
+                    dialog = DialogBoxManager.TextEntry("Input a value for absorption. Current absorption is " + (modified ? modifiedAbsorption : physicalProperties.BulletSpeedAbsorptionPower) + ".", "", new DialogButton("Apply", true, new UnityAction[1]
                     {
                         () =>
                         {
@@ -236,7 +255,10 @@ namespace Armor
                         () => dialog.Close()
                     }));
                 }
-            }));
+            });
+            contextMenuButton.LabelWhenMultipleAreSelected = "Modify hardness";
+            contextMenuButtonArray[3] = contextMenuButton;
+            buttons.AddRange(contextMenuButtonArray);
         }
     }
     // makes armor attach to limbs
@@ -245,14 +267,14 @@ namespace Armor
         bool attached;
         [SerializeField]
         public LimbBehaviour attachedLimb;
+        HingeJoint2D joint;
         public List<AttachmentBehaviour> attachments = new List<AttachmentBehaviour>(); // used to snap all attachments when armor attaches to something or activate all attachments
-        // if attachments are deleted without detaching them first, this will cause null reference exceptions
-        
+                                                                                       
         private ArmorProperties prop; // convenience
 
         [SerializeField]
         public int spriteIndex = -1; // for armor with multiple sprites; stops sprite from changing when saved
-        
+
         void Start()
         {
             phys = GetComponent<PhysicalBehaviour>();
@@ -263,14 +285,19 @@ namespace Armor
             phys.RefreshOutline();
 
             if (attachedLimb)
+            {
+                Nocollide(attachedLimb.gameObject);
                 Attach(attachedLimb);
+            }
 
             phys.HoldingPositions = new Vector3[0];
             UpdateDamage();
         }
         void Update()
         {
-            if (attached && !attachedLimb) // armor is deleted if whatever it is attached to is also deleted
+            if (attachedLimb)
+                IgnoreGrabbedObjects();
+            else if (attached) // armor is deleted if whatever it is attached to is also deleted
                 Destroy(gameObject);
         }
         public void Use(ActivationPropagation activation)
@@ -326,19 +353,12 @@ namespace Armor
                     Destroy(collider);
                 gameObject.AddComponent<PolygonCollider2D>().points = prop.colliderPoints;
             }
+            disableCollisionOnDestroyed = prop.disableCollisionWhenDestroyed;
         }
         public override void OnFragmentHit(float force)
         {
-            if (attachedLimb)
+            if (attachedLimb && (destroyed || armorPoints - (force * 5) < 0))
             {
-                force *= 5f;
-                if(!destroyed)
-                {
-                    if(armorPoints - force < 0)
-                        force -= armorPoints;
-                    else
-                        force /= 8f;
-                }
                 attachedLimb.SendMessage("OnFragmentHit", force, SendMessageOptions.DontRequireReceiver);
             }
             base.OnFragmentHit(force);
@@ -351,13 +371,36 @@ namespace Armor
                 if (!attached && limb && limb.gameObject.name == prop.armorPiece)
                     Attach(limb);
             }
+            else if (collision.gameObject.TryGetComponent(out PhysicalBehaviour phys))
+            {
+                if (phys.beingHeldByGripper)
+                {
+                    foreach (LimbBehaviour l in attachedLimb.Person.Limbs)
+                    {
+                        if (l == null || l.GripBehaviour == null)
+                            continue;
+                        if (l.GripBehaviour.CurrentlyHolding == phys)
+                            Nocollide(l.GripBehaviour.CurrentlyHolding.gameObject);
+                    }
+                }
+            }
+
         }
         void Attach(LimbBehaviour limb)
         {
             GetComponent<Rigidbody2D>().angularVelocity = 0;
             SpriteRenderer sr = GetComponent<SpriteRenderer>();
-            sr.sortingOrder = limb.gameObject.GetComponent<SpriteRenderer>().sortingOrder + 2;
-            sr.sortingLayerName = limb.gameObject.GetComponent<SpriteRenderer>().sortingLayerName;
+
+            if (prop.setSortingOrder == true)
+                sr.sortingOrder = prop.sortingOrder;
+            else
+                sr.sortingOrder = limb.gameObject.GetComponent<SpriteRenderer>().sortingOrder + prop.sortingOrder;
+
+            if (prop.layer != "")
+                sr.sortingLayerName = prop.layer;
+            else
+                sr.sortingLayerName = limb.gameObject.GetComponent<SpriteRenderer>().sortingLayerName;
+
             attached = true;
             GetComponent<Rigidbody2D>().isKinematic = true;
             transform.parent = limb.transform;
@@ -366,20 +409,46 @@ namespace Armor
             transform.localScale = Vector3.one + prop.scaleOffset;
             transform.parent = null;
 
+            /*
             FixedJoint2D joint = gameObject.AddComponent<FixedJoint2D>();
             joint.dampingRatio = 1;
             joint.frequency = 0;
             joint.connectedBody = limb.GetComponent<Rigidbody2D>();
+            */
+
+            joint = limb.gameObject.AddComponent<HingeJoint2D>();
+            joint.connectedBody = GetComponent<Rigidbody2D>();
+            joint.useLimits = true;
+            JointAngleLimits2D limits = new JointAngleLimits2D() { max = 0, min = 0 };
+            joint.limits = limits;
 
             GetComponent<Rigidbody2D>().isKinematic = false;
             attachedLimb = limb;
 
+            limb.gameObject.SendMessage("CopyPosition", gameObject, SendMessageOptions.DontRequireReceiver);
             if (attachments.Count > 0)
             {
                 foreach (AttachmentBehaviour attach in attachments)
                 {
                     attach.Snap(gameObject);
                 }
+            }
+        }
+        public void IgnoreGrabbedObjects()
+        {
+            foreach (LimbBehaviour limb in attachedLimb.Person.Limbs)
+            {
+                if (limb || limb.GripBehaviour == null)
+                    continue;
+                if (limb.GripBehaviour.CurrentlyHolding.gameObject != null)
+                    Nocollide(limb.GripBehaviour.CurrentlyHolding.gameObject);
+            }
+        }
+        void OnDestroy()
+        {
+            foreach (AttachmentBehaviour attachment in attachments)
+            {
+                Destroy(attachment.gameObject);
             }
         }
         public override void ContextMenu()
@@ -399,7 +468,8 @@ namespace Armor
                         sr.sprite = prop.sprites[spriteIndex];
                         phys.RefreshOutline();
                     }
-                }));
+                })
+                { LabelWhenMultipleAreSelected = "Next texture" });
                 GetComponent<PhysicalBehaviour>().ContextMenuOptions.Buttons.Add(new ContextMenuButton("backtexturebut", "Previous texture", "Changes the texture.", new UnityAction[1]
                 {
                     () =>
@@ -412,8 +482,22 @@ namespace Armor
                         sr.sprite = prop.sprites[spriteIndex];
                         phys.RefreshOutline();
                     }
-                }));
+                })
+                { LabelWhenMultipleAreSelected = "Previous texture"});
             }
+            GetComponent<PhysicalBehaviour>().ContextMenuOptions.Buttons.Add(new ContextMenuButton("detachbut", "Detach", "Detaches the armor from whatever body part it is on.", new UnityAction[1]
+            {
+            () =>
+                {
+                    if (attachedLimb)
+                    {
+                        Destroy(joint);
+                        attached = false;
+                        attachedLimb = null;
+                    }
+                }
+            })
+            { LabelWhenMultipleAreSelected = "Detach"});
         }
     }
     // has the properties of armor like its health and sprite
@@ -504,5 +588,11 @@ namespace Armor
 
         public Sprite sprite; // single sprite
         public Sprite[] sprites; // multiple sprites
+
+        public string layer = "";
+        public bool setSortingOrder = false;
+        public int sortingOrder = 1;
+
+        public bool disableCollisionWhenDestroyed = true; // this is for if you've made a custom collider with a void in the center of the armor. it is not required ever
     }
 }
